@@ -16,6 +16,7 @@ import logging
 from functools import partial
 from typing import Tuple
 from typing import Union
+import time
 
 import jax
 import jax.numpy as jnp
@@ -67,6 +68,12 @@ def reshape_data_from_pmap(data: jnp.ndarray) -> jnp.ndarray:
     return jnp.reshape(data, (data.shape[0], data.shape[1] * data.shape[2], -1))
 
 
+@jax.jit
+def merge_state_from_pmap(state: TaskState) -> TaskState:
+    return jax.tree_map(
+        lambda x: x.reshape((x.shape[0] * x.shape[1], *x.shape[2:])), state)
+
+
 @partial(jax.jit, static_argnums=(1, 2))
 def duplicate_params(params: jnp.ndarray,
                      repeats: int,
@@ -75,6 +82,23 @@ def duplicate_params(params: jnp.ndarray,
         return jnp.tile(params, (repeats, ) + (1,) * (params.ndim - 1))
     else:
         return jnp.repeat(params, repeats=repeats, axis=0)
+
+
+@jax.jit
+def update_score_and_mask(score, reward, mask, done):
+    new_score = score + reward * mask
+    new_mask = mask * (1 - done.ravel())
+    return new_score, new_mask
+
+
+@partial(jax.jit, static_argnums=(1,))
+def report_score(scores, n_repeats):
+    return jnp.mean(scores.ravel().reshape((-1, n_repeats)), axis=-1)
+
+
+@jax.jit
+def all_done(masks):
+    return masks.sum() == 0
 
 
 class SimManager(object):
@@ -90,6 +114,7 @@ class SimManager(object):
                  valid_vec_task: VectorizedTask,
                  seed: int = 0,
                  obs_normalizer: ObsNormalizer = None,
+                 use_for_loop: bool = False,
                  logger: logging.Logger = None):
         """Initialization function.
 
@@ -102,6 +127,7 @@ class SimManager(object):
             valid_vec_task - Vectorized tasks for validation.
             seed - Random seed.
             obs_normalizer - Observation normalization helper.
+            use_for_loop - Use for loop for rollout instead of jax.lax.scan.
             logger - Logger.
         """
 
@@ -110,6 +136,8 @@ class SimManager(object):
         else:
             self._logger = logger
 
+        self._use_for_loop = use_for_loop
+        self._logger.info('use_for_loop={}'.format(self._use_for_loop))
         self._key = random.PRNGKey(seed=seed)
         self._n_repeats = n_repeats
         self._test_n_repeats = test_n_repeats
@@ -175,12 +203,24 @@ class SimManager(object):
                 step_once_fn,
                 (task_states, policy_states, params, obs_params,
                  accumulated_rewards, valid_masks), (), max_steps)
-            return accumulated_rewards, obs_set, obs_mask
+            return accumulated_rewards, obs_set, obs_mask, task_states
 
         self._policy_reset_fn = jax.jit(policy_net.reset)
+        self._policy_act_fn = jax.jit(policy_net.get_actions)
+
+        if (
+                hasattr(train_vec_task, 'bd_extractor') and
+                train_vec_task.bd_extractor is not None
+        ):
+            self._bd_summarize_fn = jax.jit(
+                train_vec_task.bd_extractor.summarize)
+        else:
+            self._bd_summarize_fn = lambda x: x
 
         # Set up training functions.
         self._train_reset_fn = train_vec_task.reset
+        self._train_step_fn = train_vec_task.step
+        self._train_max_steps = train_vec_task.max_steps
         self._train_rollout_fn = partial(
             rollout,
             step_once_fn=partial(step_once, task=train_vec_task),
@@ -191,6 +231,8 @@ class SimManager(object):
 
         # Set up validation functions.
         self._valid_reset_fn = valid_vec_task.reset
+        self._valid_step_fn = valid_vec_task.step
+        self._valid_max_steps = valid_vec_task.max_steps
         self._valid_rollout_fn = partial(
             rollout,
             step_once_fn=partial(step_once, task=valid_vec_task),
@@ -199,7 +241,9 @@ class SimManager(object):
             self._valid_rollout_fn = jax.jit(jax.pmap(
                 self._valid_rollout_fn, in_axes=(0, 0, 0, None)))
 
-    def eval_params(self, params: jnp.ndarray, test: bool) -> jnp.ndarray:
+    def eval_params(self,
+                    params: jnp.ndarray,
+                    test: bool) -> Tuple[jnp.ndarray, TaskState]:
         """Evaluate population parameters or test the best parameter.
 
         Args:
@@ -208,7 +252,64 @@ class SimManager(object):
         Returns:
             An array of fitness scores.
         """
+        if self._use_for_loop:
+            return self._for_loop_eval(params, test)
+        else:
+            return self._scan_loop_eval(params, test)
 
+    def _for_loop_eval(self,
+                       params: jnp.ndarray,
+                       test: bool) -> Tuple[jnp.ndarray, TaskState]:
+        """Rollout using for loop (no multi-device or ma_training yet)."""
+        policy_reset_func = self._policy_reset_fn
+        policy_act_func = self._policy_act_fn
+        if test:
+            n_repeats = self._test_n_repeats
+            task_reset_func = self._valid_reset_fn
+            task_step_func = self._valid_step_fn
+            task_max_steps = self._valid_max_steps
+            params = duplicate_params(
+                params[None, :], self._n_evaluations, False)
+        else:
+            n_repeats = self._n_repeats
+            task_reset_func = self._train_reset_fn
+            task_step_func = self._train_step_fn
+            task_max_steps = self._train_max_steps
+
+        params = duplicate_params(params, n_repeats, self._ma_training)
+
+        # Start rollout.
+        self._key, reset_keys = get_task_reset_keys(
+            self._key, test, self._pop_size, self._n_evaluations, n_repeats,
+            self._ma_training)
+        task_state = task_reset_func(reset_keys)
+        policy_state = policy_reset_func(task_state)
+        scores = jnp.zeros(params.shape[0])
+        valid_mask = jnp.ones(params.shape[0])
+        start_time = time.perf_counter()
+        rollout_steps = 0
+        sim_steps = 0
+        for i in range(task_max_steps):
+            actions, policy_state = policy_act_func(
+                task_state, params, policy_state)
+            task_state, reward, done = task_step_func(task_state, actions)
+            scores, valid_mask = update_score_and_mask(
+                scores, reward, valid_mask, done)
+            rollout_steps += 1
+            sim_steps = sim_steps + valid_mask
+            if all_done(valid_mask):
+                break
+        time_cost = time.perf_counter() - start_time
+        self._logger.debug('{} steps/s, mean.steps={}'.format(
+            int(rollout_steps * task_state.obs.shape[0] / time_cost),
+            sim_steps.sum() / task_state.obs.shape[0]))
+
+        return report_score(scores, n_repeats), task_state
+
+    def _scan_loop_eval(self,
+                        params: jnp.ndarray,
+                        test: bool) -> Tuple[jnp.ndarray, TaskState]:
+        """Rollout using jax.lax.scan."""
         policy_reset_func = self._policy_reset_fn
         if test:
             n_repeats = self._test_n_repeats
@@ -251,11 +352,12 @@ class SimManager(object):
             policy_state = split_states_for_pmap(policy_state)
 
         # Do the rollouts.
-        scores, all_obs, masks = rollout_func(
+        scores, all_obs, masks, final_states = rollout_func(
             task_state, policy_state, params, self.obs_params)
         if self._num_device > 1:
             all_obs = reshape_data_from_pmap(all_obs)
             masks = reshape_data_from_pmap(masks)
+            final_states = merge_state_from_pmap(final_states)
 
         if not test and not self.obs_normalizer.is_dummy:
             self.obs_params = self.obs_normalizer.update_normalization_params(
@@ -264,9 +366,19 @@ class SimManager(object):
         if self._ma_training:
             if not test:
                 # In training, each agent has different parameters.
-                return jnp.mean(scores.ravel().reshape((n_repeats, -1)), axis=0)
+                scores = jnp.mean(
+                    scores.ravel().reshape((n_repeats, -1)), axis=0)
             else:
                 # In tests, they share the same parameters.
-                return jnp.mean(scores.ravel().reshape((n_repeats, -1)), axis=1)
+                scores = jnp.mean(
+                    scores.ravel().reshape((n_repeats, -1)), axis=1)
         else:
-            return jnp.mean(scores.ravel().reshape((-1, n_repeats)), axis=-1)
+            scores = jnp.mean(scores.ravel().reshape((-1, n_repeats)), axis=-1)
+
+        # Note: QD methods do not support ma_training for now.
+        if not self._ma_training:
+            final_states = tree_map(
+                lambda x: x.reshape((scores.shape[0], n_repeats, *x.shape[1:])),
+                final_states)
+
+        return scores, self._bd_summarize_fn(final_states)

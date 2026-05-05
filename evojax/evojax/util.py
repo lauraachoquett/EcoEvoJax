@@ -67,10 +67,12 @@ def create_logger(name: str,
         formatter = logging.Formatter(fmt=log_format)
         file_hdl.setFormatter(formatter)
         logger.addHandler(file_hdl)
+    # Set level explicitly, otherwise the logger does not output.
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
     return logger
 
 
-def load_model(model_dir: str, model_name: str) -> Tuple[np.ndarray, np.ndarray]:
+def load_model(model_file) -> Tuple[np.ndarray, np.ndarray]:
     """Load policy parameters from the specified directory.
 
     Args:
@@ -80,14 +82,13 @@ def load_model(model_dir: str, model_name: str) -> Tuple[np.ndarray, np.ndarray]
         (param_size,) and (1 + 2 * obs_params_size,).
     """
 
-    model_file = os.path.join(model_dir, model_name)
+    model_file = os.path.join(model_file)
     if not os.path.exists(model_file):
-        print(model_file)
-        raise ValueError('Model file {} does not exist.')
-    with np.load(model_file) as data:
+        raise ValueError(f'Model file {model_file} does not exist.')
+    with np.load(model_file, allow_pickle=True) as data:
         params = data['params']
-        #obs_params = data['obs_params']
-    return params, []
+        obs_params = data['obs_params']
+    return params, obs_params
 
 
 def save_model(model_dir: str,
@@ -114,3 +115,74 @@ def save_model(model_dir: str,
         np.savez(model_file,
                  params=np.array(params),
                  obs_params=np.array(obs_params))
+
+
+def save_lattices(log_dir: str,
+                  file_name: str,
+                  fitness_lattice: jnp.ndarray,
+                  params_lattice: jnp.ndarray,
+                  occupancy_lattice: jnp.ndarray) -> None:
+    """Save QD method's lattices."""
+    file_name = os.path.join(log_dir, '{}.npz'.format(file_name))
+    np.savez(file_name,
+             params_lattice=np.array(params_lattice),
+             fitness_lattice=np.array(fitness_lattice),
+             occupancy_lattice=np.array(occupancy_lattice))
+
+
+def get_tensorboard_log_fn(
+        log_dir: str) -> Callable[[int, jnp.ndarray, str], None]:
+    """
+    Returns a custom logging function for the `evojax` `Trainer`.
+    The function logs rewards after every train/test iteration with Tensorboard.
+    It tries to use `tensorflow` or `pytorch` as tensorboard provider.
+
+    Args:
+        log_dir - directory to save store the tensorboard logs
+    """
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        def log_with_pytorch(i: int, scores: jnp.ndarray, stage: str):
+            with SummaryWriter(log_dir=log_dir) as writer:
+                writer.add_scalar(
+                    f"{stage}/score_min", scores.min().item(), global_step=i)
+                writer.add_scalar(
+                    f"{stage}/score_max", scores.max().item(), global_step=i)
+                writer.add_scalar(
+                    f"{stage}/score_mean", scores.mean().item(), global_step=i)
+                writer.add_scalar(
+                    f"{stage}/score_std", scores.std().item(), global_step=i)
+                writer.add_histogram(
+                    f"{stage}/score_distribution", np.array(scores),
+                    global_step=i)
+
+        return log_with_pytorch
+
+    except ImportError:
+        pass
+
+    try:
+        import tensorflow as tf
+
+        def log_with_tf(i: int, scores: jnp.ndarray, stage: str):
+            with tf.summary.SummaryWriter(log_dir=log_dir).as_default():
+                tf.summary.scalar(
+                    f"{stage}/score_min", scores.min().item(), step=i)
+                tf.summary.scalar(
+                    f"{stage}/score_max", scores.max().item(), step=i)
+                tf.summary.scalar(
+                    f"{stage}/score_mean", scores.mean().item(), step=i)
+                tf.summary.scalar(
+                    f"{stage}/score_std", scores.std().item(), step=i)
+                tf.summary.histogram(
+                    f"{stage}/score_distribution", np.array(scores), step=i)
+
+        return log_with_tf
+
+    except ImportError:
+        pass
+
+    raise ImportError(
+        "Please install the tensorboard AND (tensorflow OR pytorch) "
+        "packages to log the rewards to tensorboard")

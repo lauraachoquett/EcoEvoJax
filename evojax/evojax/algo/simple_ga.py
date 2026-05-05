@@ -44,13 +44,13 @@ class SimpleGA(NEAlgorithm):
 
         if self.pop_size % 2 == 1:
             self.pop_size += 1
-            self._logger.info(
+            self.logger.info(
                 'Population size should be an even number, set to {}'.format(
                     self.pop_size))
 
         if self.pop_size % self.truncation_divisor != 0:
             self.truncation_divisor = 2
-            self._logger.info(
+            self.logger.info(
                 'Population size must be a multiple of truncation divisor, \
                  set to {}'.format(self.truncation_divisor))
 
@@ -58,7 +58,7 @@ class SimpleGA(NEAlgorithm):
         self.sigma = sigma
 
         self.params = jnp.zeros((pop_size, param_size))
-        self._best_params = jnp.zeros((param_size))
+        self._best_params = None
 
         self.rand_key = jax.random.PRNGKey(seed=seed)
 
@@ -95,7 +95,6 @@ class SimpleGA(NEAlgorithm):
 
     def ask(self) -> jnp.ndarray:
         self.rand_key, self.params = self.ask_fn(self.rand_key, self.params)
-        self.params=jnp.concatenate([self.params[:-1],jnp.expand_dims(self._best_params,0)],axis=0)
         return self.params
 
     def tell(self, fitness: Union[np.ndarray, jnp.ndarray]) -> None:

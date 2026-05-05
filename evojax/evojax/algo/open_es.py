@@ -59,12 +59,12 @@ class OpenES(NEAlgorithm):
         # Delayed importing of evosax
 
         if sys.version_info.minor < 7:
-            print('evosax, which is needed byOpenES, requires python>=3.7')
-            print('  please consider upgrading your Python version.')
+            print("evosax, which is needed byOpenES, requires python>=3.7")
+            print("  please consider upgrading your Python version.")
             sys.exit(1)
 
         try:
-            from evosax import OpenES, FitnessShaper
+            import evosax
         except ModuleNotFoundError:
             print("You need to install evosax for its OpenES implementation:")
             print("  pip install evosax")
@@ -80,21 +80,26 @@ class OpenES(NEAlgorithm):
         self.rand_key = jax.random.PRNGKey(seed=seed)
 
         # Instantiate evosax's Open ES strategy
-        self.es = OpenES(
+        self.es = evosax.OpenES(
             popsize=pop_size,
             num_dims=param_size,
             opt_name=optimizer,
         )
 
         # Set hyperparameters according to provided inputs
-        self.es_params = self.es.default_params
-        for k, v in optimizer_config.items():
-            self.es_params[k] = v
-        self.es_params["sigma_init"] = init_stdev
-        self.es_params["sigma_decay"] = decay_stdev
-        self.es_params["sigma_limit"] = limit_stdev
-        self.es_params["init_min"] = 0.0
-        self.es_params["init_max"] = 0.0
+        # Set hyperparameters according to provided inputs
+        self.es_params = self.es.default_params.replace(
+            sigma_init=init_stdev,
+            sigma_decay=decay_stdev,
+            sigma_limit=limit_stdev,
+            init_min=0.0,
+            init_max=0.0,
+        )
+
+        # Update optimizer-specific parameters of Adam
+        self.es_params = self.es_params.replace(
+            opt_params=self.es_params.opt_params.replace(**optimizer_config)
+        )
 
         # Initialize the evolution strategy state
         self.rand_key, init_key = jax.random.split(self.rand_key)
@@ -102,8 +107,8 @@ class OpenES(NEAlgorithm):
 
         # By default evojax assumes maximization of fitness score!
         # Evosax, on the other hand, minimizes!
-        self.fit_shaper = FitnessShaper(
-            centered_rank=True, z_score=True, w_decay=w_decay, maximize=True
+        self.fit_shaper = evosax.FitnessShaper(
+            centered_rank=True, w_decay=w_decay, maximize=True
         )
 
     def ask(self) -> jnp.ndarray:
@@ -111,14 +116,6 @@ class OpenES(NEAlgorithm):
         self.params, self.es_state = self.es.ask(
             ask_key, self.es_state, self.es_params
         )
-        #self.rand_key, key = jax.random.split(self.rand_key)
-        #rand=jax.random.uniform(key)
-        #a=36864
-        #mask=jnp.where(rand>0.5,jnp.concatenate([jnp.zeros((1,a)),jnp.ones((1,self.params.shape[1]-a))],axis=1),jnp.concatenate([jnp.ones((1,a)),jnp.zeros((1,self.params.shape[1]-a))],axis=1))
-        #self.params=self.es_state["mean"]+mask*(self.params-self.es_state["mean"])
-       
-        
-        
         return self.params
 
     def tell(self, fitness: Union[np.ndarray, jnp.ndarray]) -> None:
@@ -130,10 +127,11 @@ class OpenES(NEAlgorithm):
 
     @property
     def best_params(self) -> jnp.ndarray:
-        return jnp.array(self.es_state["mean"], copy=True)
+        return jnp.array(self.es_state.mean, copy=True)
 
     @best_params.setter
     def best_params(self, params: Union[np.ndarray, jnp.ndarray]) -> None:
-        self.es_state["best_member"] = jnp.array(params, copy=True)
-        self.es_state["mean"] = jnp.array(params, copy=True)
-
+        self.es_state = self.es_state.replace(
+            best_member=jnp.array(params, copy=True),
+            mean=jnp.array(params, copy=True),
+        )

@@ -42,7 +42,7 @@ class MLP(nn.Module):
             x = nn.tanh(x)
         elif self.out_fn == 'softmax':
             x = nn.softmax(x, axis=-1)
-        elif self.out_fn!='categorical':
+        else:
             raise ValueError(
                 'Unsupported output activation: {}'.format(self.out_fn))
         return x
@@ -76,4 +76,3 @@ class MLPPolicy(PolicyNetwork):
                     p_states: PolicyState) -> Tuple[jnp.ndarray, PolicyState]:
         params = self._format_params_fn(params)
         return self._forward_fn(params, t_states.obs), p_states
-

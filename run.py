@@ -6,10 +6,16 @@ import yaml
 from evojax.task.base import TaskState
 from flax.struct import dataclass
 import jax.numpy as jnp
-
 sys.path.append(os.getcwd())
 from source.natural_env import simulate
 from source.lab_env import eval_pretrained
+
+import jax
+if not hasattr(jax.tree_util, 'tree_multimap'):
+    jax.tree_util.tree_multimap = jax.tree_util.tree_map
+
+import jax._src.interpreters.xla as xla
+import types
 
 
 # these classes are used in the lab environment

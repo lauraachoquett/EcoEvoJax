@@ -4,7 +4,7 @@ EvoJAX is a scalable, general purpose, hardware-accelerated [neuroevolution](htt
 
 This repo also includes several extensible examples of EvoJAX for a wide range of tasks, including supervised learning, reinforcement learning and generative art, demonstrating how EvoJAX can run your evolution experiments within minutes on a single accelerator, compared to hours or days when using CPUs.
 
-EvoJAX paper: https://arxiv.org/abs/2202.05008
+EvoJAX paper: https://arxiv.org/abs/2202.05008 (presentation [video](https://youtu.be/TMkft3wWpb8))
 
 Please use this BibTeX if you wish to cite this project in your publications:
 
@@ -94,11 +94,14 @@ We illustrate how the classic control task can be implemented in JAX and be inte
 
 <table width="100%">
   <tr>
-    <td width="50%">
+    <td width="30%">
       <img width="100%" src="https://media.giphy.com/media/TG05TWWrDAxPoqKG1s/giphy.gif"></img>
     </td>
-    <td width="50%">
+    <td width="30%">
       <img width="100%" src="https://media.giphy.com/media/zxSBpuaXdaxIIFbDI4/giphy.gif"></img>
+    </td>
+    <td width="40%">
+      <img width="100%" src="https://media.giphy.com/media/aPiwuFjx9fKeHyIFBH/giphy.gif"></img>
     </td>
   </tr>
   <tr>
@@ -108,17 +111,24 @@ We illustrate how the classic control task can be implemented in JAX and be inte
     <td>
       ES-CLIP: <i>“A drawing of a cat”</i>
     </td>
+    <td>
+      Slime Volleyball
+    </td>
   </tr>
 </table>
 
 * [WaterWorld](https://github.com/google/evojax/blob/main/examples/train_waterworld.py) -
 In this [task](https://cs.stanford.edu/people/karpathy/reinforcejs/waterworld.html), an agent tries to get as much food as possible while avoiding poisons.
-EvoJAX is able to learn the agent in tens of minutes on a single GPU.
+EvoJAX is able to train the agent in tens of minutes on a single GPU.
 Moreover, we demonstrate that [multi-agents training](https://github.com/google/evojax/blob/main/examples/train_waterworld_ma.py) in EvoJAX is possible, which is beneficial for learning policies that can deal with environmental complexity and uncertainties.
 * [Abstract Paintings](https://es-clip.github.io/) ([notebook 1](https://github.com/google/evojax/blob/main/examples/notebooks/AbstractPainting01.ipynb) and [notebook 2](https://github.com/google/evojax/blob/main/examples/notebooks/AbstractPainting02.ipynb)) -
 We reproduce the results from this [computational creativity work](https://es-clip.github.io/) and show how the original work, whose implementation requires multiple CPUs and GPUs, could be accelerated on a single GPU efficiently using EvoJAX, which was not possible before.
 Moreover, with multiple GPUs/TPUs, EvoJAX can further speed up the mentioned work almost linearly.
 We also show that the modular design of EvoJAX allows its components to be used independently -- in this case it is possible to use only the ES algorithms from EvoJAX while leveraging one's own training loops and environment implantation.
+* [Neural Slime Volleyball](https://github.com/google/evojax/blob/main/examples/train_slimevolley.py) -
+In this [task](https://otoro.net/slimevolley/), the agent's goal is to get the ball to land on the ground of its opponent's side, causing its opponent to lose a life. The episode ends when either agent loses all five lives, or after the time limit. An agent receives a reward of +1 when its opponent loses or -1 when it loses a life.
+EvoJAX is able to train the agent in under 5 minutes on a single GPU, compared hours on multiple CPUs.
+This implementation is based on the [Slime Volleyball Gym Environment](https://github.com/hardmaru/slimevolleygym), which is a Python port of the original JavaScript version of the [game](https://otoro.net/slimevolley/) that you can play in the web browser. In all of these versions, the built-in AI opponent and the less-than-ideal physics are identical.
 
 ## Call for Contributions
 
@@ -149,7 +159,7 @@ Note that these are not hard requirements, but just rough guidelines.
 Please use the [benchmark script](https://github.com/google/evojax/tree/main/scripts/benchmarks) to evaluate your algorithm before sending us a PR, let us know if you are unable to test on some tasks due to hardware limitations.
 See this [example](https://github.com/google/evojax/pull/5#issuecomment-1043879609) pull request thread of a Genetic Algorithm that has been merged into EvoJAX to see how it should be done. 
 
-Feel free to reach out to evojax-dev@google.com if you wish to discuss further.
+Feel free to reach out to evojax-dev@google.com or evojax-dev@googlegroups.com if you wish to discuss further.
 
 ### New Tasks
 

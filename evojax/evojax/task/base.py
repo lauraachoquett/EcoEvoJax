@@ -18,7 +18,10 @@ from typing import Dict
 from typing import List
 from typing import Tuple
 from typing import TypeVar
+import dataclasses
+
 import jax.numpy as jnp
+from flax.struct import dataclass
 
 
 class TaskState(ABC):
@@ -61,7 +64,8 @@ class VectorizedTask(ABC):
             jnp.ndarray. Task termination flag: 1 for done, 0 otherwise.
         """
         raise NotImplementedError()
-        
+
+
 T = TypeVar('T')
 
 
@@ -73,6 +77,7 @@ class BDExtractor(object):
                  bd_state_spec: List[Tuple[str, T]],
                  task_state_def: T):
         """Initialization of a behavior descriptor extractor.
+
         Args:
             bd_spec - A list of behavior descriptors, each of which gives the
                       name and the number of bins. E.g. [('bd1', 10), ...]
@@ -92,6 +97,7 @@ class BDExtractor(object):
 
     def get_extended_task_state_def(self, task_state_def: T) -> T:
         """Augment the original task state definition with more entries.
+
         Args:
             task_state_def - This should be a flax.struct.dataclass instance.
         Returns:
@@ -115,6 +121,7 @@ class BDExtractor(object):
 
     def init_extended_state(self, task_state: TaskState) -> T:
         """Return an extended task_state that includes bd_state fields.
+
         Args:
             task_state - Original task state.
         Returns:
@@ -129,6 +136,7 @@ class BDExtractor(object):
 
     def init_state(self, extended_task_state: T) -> Dict[str, T]:
         """A task initializes some behavior descriptor related states here.
+
         Args:
             extended_task_state - An instance of the extended task state, with
                                   dummy behavior descriptor related states.
@@ -144,6 +152,7 @@ class BDExtractor(object):
                reward: jnp.float32,
                done: jnp.int32) -> T:
         """Update behavior descriptor calculation states.
+
         Args:
             extended_task_state - An instance of extended task state.
             action - The action taken at this step.
@@ -157,6 +166,7 @@ class BDExtractor(object):
 
     def summarize(self, extended_task_state: T) -> T:
         """Summarize the behavior descriptor related states to calculate BDs.
+
         Args:
             extended_task_state - An instance of the extended task state.
         Returns:

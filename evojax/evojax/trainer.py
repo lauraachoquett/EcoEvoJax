@@ -14,16 +14,21 @@
 
 import logging
 import time
+from typing import Optional, Callable
+
+import jax.numpy as jnp
 import numpy as np
 
 from evojax.task.base import VectorizedTask
 from evojax.policy import PolicyNetwork
 from evojax.algo import NEAlgorithm
+from evojax.algo import QualityDiversityMethod
 from evojax.sim_mgr import SimManager
 from evojax.obs_norm import ObsNormalizer
 from evojax.util import create_logger
 from evojax.util import load_model
 from evojax.util import save_model
+from evojax.util import save_lattices
 
 
 class Trainer(object):
@@ -42,10 +47,12 @@ class Trainer(object):
                  n_evaluations: int = 100,
                  seed: int = 42,
                  debug: bool = False,
+                 use_for_loop: bool = False,
                  normalize_obs: bool = False,
                  model_dir: str = None,
                  log_dir: str = None,
-                 logger: logging.Logger = None):
+                 logger: logging.Logger = None,
+                 log_scores_fn: Optional[Callable[[int, jnp.ndarray, str], None]] = None):
         """Initialization.
 
         Args:
@@ -60,10 +67,13 @@ class Trainer(object):
             n_evaluations - Number of tests to conduct.
             seed - Random seed to use.
             debug - Whether to turn on the debug flag.
+            use_for_loop - Use for loop for rollouts.
             normalize_obs - Whether to use an observation normalizer.
             model_dir - Directory to save/load model.
             log_dir - Directory to dump logs.
             logger - Logger.
+            log_scores_fn - custom function to log the scores array. Expects input:
+                `current_iter`: int, `scores`: jnp.ndarray, 'stage': str = "train" | "test"
         """
 
         if logger is None:
@@ -77,6 +87,8 @@ class Trainer(object):
         self._max_iter = max_iter
         self.model_dir = model_dir
         self._log_dir = log_dir
+
+        self._log_scores_fn = log_scores_fn or (lambda x, y, z: None)
 
         self._obs_normalizer = ObsNormalizer(
             obs_shape=train_task.obs_shape,
@@ -94,6 +106,7 @@ class Trainer(object):
             valid_vec_task=test_task,
             seed=seed,
             obs_normalizer=self._obs_normalizer,
+            use_for_loop=use_for_loop,
             logger=self._logger,
         )
 
@@ -113,7 +126,7 @@ class Trainer(object):
                 raise ValueError('No policy parameters to evaluate.')
             self._logger.info('Start to test the parameters.')
             scores = np.array(
-                self.sim_mgr.eval_params(params=params, test=True))
+                self.sim_mgr.eval_params(params=params, test=True)[0])
             self._logger.info(
                 '[TEST] #tests={0}, max={1:.4f}, avg={2:.4f}, min={3:.4f}, '
                 'std={4:.4f}'.format(scores.size, scores.max(), scores.mean(),
@@ -136,11 +149,14 @@ class Trainer(object):
                     time.perf_counter() - start_time))
 
                 start_time = time.perf_counter()
-                scores = self.sim_mgr.eval_params(params=params, test=False)
+                scores, bds = self.sim_mgr.eval_params(
+                    params=params, test=False)
                 self._logger.debug('sim_mgr.eval_params time: {0:.4f}s'.format(
                     time.perf_counter() - start_time))
 
                 start_time = time.perf_counter()
+                if isinstance(self.solver, QualityDiversityMethod):
+                    self.solver.observe_bd(bds)
                 self.solver.tell(fitness=scores)
                 self._logger.debug('solver.tell time: {0:.4f}s'.format(
                     time.perf_counter() - start_time))
@@ -152,17 +168,19 @@ class Trainer(object):
                         'avg={3:.4f}, min={4:.4f}, std={5:.4f}'.format(
                             i, scores.size, scores.max(), scores.mean(),
                             scores.min(), scores.std()))
+                    self._log_scores_fn(i, scores, "train")
 
                 if i > 0 and i % self._test_interval == 0:
                     best_params = self.solver.best_params
-                    test_scores = self.sim_mgr.eval_params(
+                    test_scores, _ = self.sim_mgr.eval_params(
                         params=best_params, test=True)
                     self._logger.info(
-                        '[TEST] Iter={0}, #tests={1}, max={2:.4f} avg={3:.4f}, '
+                        '[TEST] Iter={0}, #tests={1}, max={2:.4f}, avg={3:.4f}, '
                         'min={4:.4f}, std={5:.4f}'.format(
                             i, test_scores.size, test_scores.max(),
                             test_scores.mean(), test_scores.min(),
                             test_scores.std()))
+                    self._log_scores_fn(i, test_scores, "test")
                     mean_test_score = test_scores.mean()
                     save_model(
                         model_dir=self._log_dir,
@@ -175,7 +193,7 @@ class Trainer(object):
 
             # Test and save the final model.
             best_params = self.solver.best_params
-            test_scores = self.sim_mgr.eval_params(
+            test_scores, _ = self.sim_mgr.eval_params(
                 params=best_params, test=True)
             self._logger.info(
                 '[TEST] Iter={0}, #tests={1}, max={2:.4f}, avg={3:.4f}, '
@@ -191,6 +209,14 @@ class Trainer(object):
                 best=mean_test_score > best_score,
             )
             best_score = max(best_score, mean_test_score)
+            if isinstance(self.solver, QualityDiversityMethod):
+                save_lattices(
+                    log_dir=self._log_dir,
+                    file_name='qd_lattices',
+                    fitness_lattice=self.solver.fitness_lattice,
+                    params_lattice=self.solver.params_lattice,
+                    occupancy_lattice=self.solver.occupancy_lattice,
+                )
             self._logger.info(
                 'Training done, best_score={0:.4f}'.format(best_score))
 

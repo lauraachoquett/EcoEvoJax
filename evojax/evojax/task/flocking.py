@@ -31,12 +31,12 @@ from evojax.task.base import TaskState
 
 DT = 0.2
 SPEED = 0.12
-J_ALIGN = 0.6
-D_ALIGN = 0.25
-J_AVOID = 0.12
-D_AVOID = 0.08
-J_COHESION = 0.025
-D_COHESION = 0.2
+J_ALIGN = 0.2
+D_ALIGN = 0.15
+J_AVOID = 0.1
+D_AVOID = 0.12
+J_COHESION = 0.3
+D_COHESION = 0.3
 ALPHA = 3
 
 SCREEN_W = 400
@@ -65,6 +65,11 @@ def sample_theta(key: jnp.ndarray, n: jnp.ndarray) -> jnp.ndarray:
 def unpack_obs(obs: jnp.ndarray) -> jnp.ndarray:
     position, theta = obs[..., :2], obs[..., 2:]
     return position, theta
+
+
+def unpack_act(action: jnp.ndarray) -> jnp.ndarray:
+    d_theta, d_speed = action[..., :1], action[..., 1:2]
+    return d_theta, d_speed
 
 
 def pack_obs(position: jnp.ndarray, theta: jnp.ndarray) -> jnp.ndarray:
@@ -162,20 +167,31 @@ def calc_energy(position, theta):
         E_cohesion(dR, N, mask))
 
 
-def update_state(state, action):
+def update_state(state, action, action_type):
     position, theta = unpack_obs(state.state)
-    d_theta = action
+    action = jnp.concatenate([action, jnp.ones_like(action)], axis=1)
+    d_theta, d_speed = unpack_act(action)
     N = normal(theta)
-    new_obs = pack_obs(jnp.mod(position + DT * SPEED * N, 1),
+    d_speed = jax.lax.cond(
+        action_type,
+        lambda x: (x + 1) / 2 * 0.4 + 0.8,
+        lambda x: x,
+        d_speed
+        )
+    new_obs = pack_obs(jnp.mod(position + DT * SPEED * N * d_speed, 1),
                        theta + DT * d_theta)
     return new_obs
 
 
-def get_reward(state: State, max_steps: jnp.int32):
+def get_reward(state: State, max_steps: jnp.int32, reward_type: jnp.int32):
     position, theta = unpack_obs(state.state)
-    reward = -calc_energy(position, theta)
-    gamma = state.steps / max_steps
-    return reward * gamma ** 2
+    reward = calc_energy(position, theta)
+    reward = jax.lax.cond(
+        reward_type == 0,
+        lambda x: -x,
+        lambda x: -x * (state.steps / max_steps) ** 2,
+        reward)
+    return reward
 
 
 def to_pillow_coordinate(position, width, height):
@@ -233,10 +249,15 @@ def render_single(obs_single):
 
 class FlockingTask(VectorizedTask):
 
-    def __init__(self, max_steps: int = 150):
+    def __init__(
+            self,
+            max_steps: int = 150,
+            reward_type: int = 0,  # (0: as it is, 1: increase rewards for late step)
+            action_type: int = 0   # (0: theta, 1: theta/speed)
+            ):
         self.max_steps = max_steps
         self.obs_shape = tuple([NEIGHBOR_NUM * 3, BOIDS_NUM])
-        self.act_shape = tuple([1, ])
+        self.act_shape = tuple([action_type + 1, ])
 
         def reset_fn(key):
             next_key, key = jax.random.split(key)
@@ -250,11 +271,11 @@ class FlockingTask(VectorizedTask):
         self._reset_fn = jax.jit(jax.vmap(reset_fn))
 
         def step_fn(state, action):
-            new_state = update_state(state, action)
+            new_state = update_state(state, action, action_type)
             new_obs = choose_neighbor(new_state)
             new_steps = jnp.int32(state.steps + 1)
             next_key, _ = jax.random.split(state.key)
-            reward = get_reward(state, max_steps)
+            reward = get_reward(state, max_steps, reward_type)
             done = jnp.where(max_steps <= new_steps, True, False)
             return State(obs=new_obs,
                          state=new_state,

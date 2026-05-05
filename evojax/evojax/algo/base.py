@@ -14,6 +14,7 @@
 
 from abc import ABC
 from abc import abstractmethod
+from typing import Any
 from typing import Dict
 from typing import Union
 import numpy as np
@@ -43,6 +44,22 @@ class NEAlgorithm(ABC):
         """
         raise NotImplementedError()
 
+    def save_state(self) -> Any:
+        """Optionally, save the state of the algorithm.
+
+        Returns
+            Saved state.
+        """
+        return None
+
+    def load_state(self, saved_state: Any) -> None:
+        """Optionally, load the saved state of the algorithm.
+
+        Args:
+            saved_states - The result of self.save_states().
+        """
+        pass
+
     @property
     def best_params(self) -> jnp.ndarray:
         raise NotImplementedError()
@@ -50,6 +67,7 @@ class NEAlgorithm(ABC):
     @best_params.setter
     def best_params(self, params: Union[np.ndarray, jnp.ndarray]) -> None:
         raise NotImplementedError()
+
 
 class QualityDiversityMethod(NEAlgorithm):
     """Quality diversity method."""

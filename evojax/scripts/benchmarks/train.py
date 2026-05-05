@@ -45,39 +45,21 @@ def main(config):
     )
 
     # Train.
-    if(config["model_dir"]!=""):
-        trainer = Trainer(
-            policy=policy,
-            solver=solver,
-            train_task=train_task,
-            test_task=test_task,
-            max_iter=config["max_iter"],
-            log_interval=config["log_interval"],
-            test_interval=config["test_interval"],
-            n_repeats=config["n_repeats"],
-            n_evaluations=config["num_tests"],
-            seed=config["seed"],
-            model_dir=config["model_dir"],
-            log_dir=log_dir,
-            logger=logger,
-            normalize_obs=config["normalize"],
-        )
-    else:
-        trainer = Trainer(
-            policy=policy,
-            solver=solver,
-            train_task=train_task,
-            test_task=test_task,
-            max_iter=config["max_iter"],
-            log_interval=config["log_interval"],
-            test_interval=config["test_interval"],
-            n_repeats=config["n_repeats"],
-            n_evaluations=config["num_tests"],
-            seed=config["seed"],
-            log_dir=log_dir,
-            logger=logger,
-            normalize_obs=config["normalize"],
-        )
+    trainer = Trainer(
+        policy=policy,
+        solver=solver,
+        train_task=train_task,
+        test_task=test_task,
+        max_iter=config["max_iter"],
+        log_interval=config["log_interval"],
+        test_interval=config["test_interval"],
+        n_repeats=config["n_repeats"],
+        n_evaluations=config["num_tests"],
+        seed=config["seed"],
+        log_dir=log_dir,
+        logger=logger,
+        normalize_obs=config["normalize"],
+    )
 
     trainer.run(demo_mode=False)
 

@@ -75,7 +75,8 @@ class EncoderLSTM(nn.Module):
     @nn.compact
     def __call__(self, carry, x):
         lstm_state, is_eos = carry
-        new_lstm_state, y = nn.LSTMCell()(lstm_state, x)
+        features = lstm_state[0].shape[-1]
+        new_lstm_state, y = nn.LSTMCell(features)(lstm_state, x)
 
         # Pass forward the previous state if EOS has already been reached.
         def select_carried_state(new_state, old_state):
@@ -91,8 +92,8 @@ class EncoderLSTM(nn.Module):
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
         # use dummy key since default state init fn is just zeros.
-        return nn.LSTMCell.initialize_carry(
-            jax.random.PRNGKey(0), (batch_size,), hidden_size)
+        return nn.LSTMCell(hidden_size, parent=None).initialize_carry(
+            jax.random.PRNGKey(0), (batch_size, hidden_size))
 
 
 class Encoder(nn.Module):
@@ -106,7 +107,7 @@ class Encoder(nn.Module):
         batch_size = inputs.shape[0]
         lstm = EncoderLSTM(name='encoder_lstm')
         init_lstm_state = lstm.initialize_carry(batch_size, self.hidden_size)
-        init_is_eos = jnp.zeros(batch_size, dtype=np.bool)
+        init_is_eos = jnp.zeros(batch_size, dtype=np.bool_)
         init_carry = (init_lstm_state, init_is_eos)
         (final_state, _), _ = lstm(init_carry, inputs)
         return final_state
@@ -128,7 +129,8 @@ class DecoderLSTM(nn.Module):
         lstm_state, last_prediction = carry
         if not self.teacher_force:
             x = last_prediction
-        lstm_state, y = nn.LSTMCell()(lstm_state, x)
+        features = lstm_state[0].shape[-1]
+        lstm_state, y = nn.LSTMCell(features)(lstm_state, x)
         logits = nn.Dense(features=char_table.vocab_size)(y)
         predicted_token = jnp.argmax(logits, axis=-1)
         prediction = jax.nn.one_hot(
