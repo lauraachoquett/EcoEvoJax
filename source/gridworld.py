@@ -221,7 +221,7 @@ class Gridworld(VectorizedTask):
             # use agent 0 to 4 as a dump always dead if no dead put in there to be sure not overiding the alive ones
             # but maybe better to just make sure that there are 5 places available by checking if 5 dead (but this way may be better if we augment the 5)
             dead = 1 - alive
-            dead = dead.at[0:5].set(0.001)
+            dead = dead.at[0:5].set(jnp.uint16(1)) 
 
             next_key, key = random.split(key)
             # empty_spots for new agent are dead ones
@@ -231,7 +231,7 @@ class Gridworld(VectorizedTask):
             # compute reproducer spot
             next_key, key = random.split(key)
             reproducer = jnp.where(time_good_level > self.time_reproduce, 1, 0)
-            reproducer = reproducer.at[0:5].set(0.001)
+            reproducer = reproducer.at[0:5].set(jnp.uint16(0))
             reproducer_spots = jax.random.choice(next_key, jnp.arange(time_good_level.shape[0]),
                                                  p=reproducer / (reproducer.sum() + 1e-10), replace=False, shape=(5,))
 

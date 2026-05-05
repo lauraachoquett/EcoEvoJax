@@ -122,7 +122,7 @@ def run_lab_envs(project_dir, params, reproduction_on, key, current_gen):
 
     """
     eval_trials = 10
-    random_agents = 50
+    random_agents = 2
     window = 20
     test_types = ["low-resources",
                   "medium-resources",
@@ -148,14 +148,19 @@ def run_lab_envs(project_dir, params, reproduction_on, key, current_gen):
 
         # sample a random agent (for technical reasons we need 10 agents to have enough slots for reproduction)
         # agent 9 is the main agent
-        with open(project_dir + "/train/data/gen_" + str(current_gen) + "states.pkl","rb") as f:
+        with open(project_dir + "/train/data/gen_" + str(current_gen) + ".pkl","rb") as f:
             state_info = pickle.load(f)
             agent_info = state_info["states"][-1].agents.time_alive
             potential_agents = [idx for idx, el in enumerate(agent_info) if el> 300 ]
-
+            
+        
         agent_idx = nj_random.choice(potential_agents)
+
+
         agent_idxs = [(agent_idx - el)%(params.shape[0]) for el in range(10)]
-        params_test = params[agent_idxs, :]
+        print("agent id :",agent_idxs)
+        print("params shape",params.shape)
+        params_test = params[np.array(agent_idxs), :]
 
         for test_type in test_types:
 
@@ -331,20 +336,20 @@ def eval_pretrained(project_dir):
     project_dir: str
         name of directory containing the trained models
     """
-    with open(project_dir + "/config.yaml", "r") as f:
-        config = yaml.safe_load(f)
 
     key = jax.random.PRNGKey(np.random.randint(42))
 
     # choose which generations to evaluate
-    gen = 950 # evaluate only the last generation
+    gen = 1 # evaluate only the last generation
 
     reproduction_on_values = [True, False]
 
     for reproduction_on in reproduction_on_values:
 
         total_eval_results = []
-        params, obs_param = load_model(project_dir + "/train/models", "gen_" + str(gen) + ".npz")
+        path = project_dir + "/train/models/" + 'step_' + str(gen) + '.npz'
+        print('path : ',path)
+        params,_= load_model(path)
 
         # run offline evaluation
         run_lab_envs(project_dir, params, reproduction_on, key, gen)
@@ -352,5 +357,4 @@ def eval_pretrained(project_dir):
 
 if __name__ == "__main__":
     project_dir = sys.argv[1]
-
     eval_pretrained(project_dir)

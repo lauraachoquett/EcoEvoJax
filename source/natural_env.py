@@ -56,6 +56,7 @@ def simulate(project_dir):
 
     keep_mean_rewards = []
     keep_max_rewards = []
+    states = []
 
     # ----- main simulation begins -----
     for gen in range(config["num_gens"]):
@@ -94,13 +95,15 @@ def simulate(project_dir):
 
         keep_mean_rewards.append(np.mean(accumulated_rewards))
         keep_max_rewards.append(np.max(accumulated_rewards))
+        states.append(state)
 
         if gen % config["eval_freq"] * 10 == 0:
             vid.close()
             # save training data and plots
             with open(project_dir + "/train/data/gen_" + str(gen) + ".pkl", "wb") as f:
                 pickle.dump({"mean_rewards": keep_mean_rewards,
-                             "max_rewards": keep_max_rewards}, f)
+                             "max_rewards": keep_max_rewards,
+                             "states":states}, f)
 
             save_model(model_dir=project_dir + "/train/models", model_name="step_" + str(gen),
                        params=state.agents.params)
