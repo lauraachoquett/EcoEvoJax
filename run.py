@@ -14,7 +14,6 @@ import jax
 if not hasattr(jax.tree_util, 'tree_multimap'):
     jax.tree_util.tree_multimap = jax.tree_util.tree_map
 
-import jax._src.interpreters.xla as xla
 import types
 
 
