@@ -78,17 +78,18 @@ class MetaRNN_bcppr(nn.Module):
         # inputs est de forme (7, 7, 2)
         out = inputs
         
+        
         # Passage dans le premier bloc convolutif safe
         out = self.conv1(out)
         out = nn.relu(out)
         # avg_pool attend un tenseur avec une dimension de batch ou s'applique sur les axes spatiaux.
         # Pour (7, 7, 4), on spécifie les dimensions de la fenêtre locale.
-        out = nn.avg_pool(out, window_shape=(2, 2), strides=(1, 1), padding="SAME")
+        out = nn.avg_pool(out, window_shape=(2, 2), strides=(2, 2), padding="SAME")
         
         # Passage dans le second bloc convolutif safe
         out = self.conv2(out)
         out = nn.relu(out)
-        out = nn.avg_pool(out, window_shape=(2, 2), strides=(1, 1), padding="SAME")
+        out = nn.avg_pool(out, window_shape=(2, 2), strides=(2, 2), padding="SAME")
         
         # Aplatissement propre du tenseur de caractéristiques spatiales extrait
         out = out.reshape(-1)
