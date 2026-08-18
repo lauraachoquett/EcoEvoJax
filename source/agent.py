@@ -73,10 +73,11 @@ class MetaRNN_bcppr(nn.Module):
     hidden_layers: list
     encoder_in: bool
     encoder_layers: list
+    carry_size: int = 4          # doit valoir hidden_dim : reset_b dimensionne h/c dessus
 
     def setup(self):
         self._num_micro_ticks = 1
-        self._lstm = nn.recurrent.LSTMCell(features=4)  # taille inferee du carry, comme l'original
+        self._lstm = nn.recurrent.LSTMCell(features=self.carry_size)
         self.conv1 = SafeConv(features=4, kernel_size=(3, 3),
                               strides=(2, 2), padding="SAME")
         self.conv2 = SafeConv(features=8, kernel_size=(3, 3),
@@ -87,7 +88,8 @@ class MetaRNN_bcppr(nn.Module):
             self._encoder = [nn.Dense(size) for size in self.encoder_layers]
 
     def __call__(self, h, c, inputs: jnp.ndarray,
-                 last_action: jnp.ndarray, reward: jnp.ndarray,energy : jnp.ndarray):
+                 last_action: jnp.ndarray, reward: jnp.ndarray, energy: jnp.ndarray,
+                 last_eaten: jnp.ndarray):
         carry = (h, c)
 
         out = inputs
@@ -105,12 +107,22 @@ class MetaRNN_bcppr(nn.Module):
             for layer in self._encoder:
                 out = jax.nn.tanh(layer(out))
 
-        inputs_encoded = jnp.concatenate([out, last_action, reward,energy])
-
+        # Deux voies separees.
+        #
+        # La MEMOIRE ne recoit pas la vision : seulement ce que l'agent vient de
+        # manger, ce que ca lui a rapporte, et son etat interne. `last_eaten` et
+        # `reward` portent tous deux sur le pas precedent, donc l'association a
+        # retenir -- ce canal vaut tant -- arrive d'un bloc, sans qu'il y ait
+        # d'assignation de credit a faire a travers le temps.
+        mem_in = jnp.concatenate([last_action, reward, energy, last_eaten])
         for _ in range(self._num_micro_ticks):
-            carry, out = self._lstm(carry, inputs_encoded)
+            carry, mem = self._lstm(carry, mem_in)
 
-        out = jnp.concatenate([inputs_encoded, out])
+        # La TETE combine la scene courante, qui suffit a naviguer, et la valeur
+        # apprise des canaux, qui n'existe que dans le carry. Pour eviter le
+        # poison il faut donc s'en servir : l'observation seule ne dit pas
+        # quel canal est toxique.
+        out = jnp.concatenate([out, last_action, reward, energy, mem])
         for layer in self._hiddens:
             out = jax.nn.tanh(layer(out))
         out = self._output_proj(out)
@@ -146,9 +158,13 @@ class MetaRnnPolicy_bcppr(PolicyNetwork):
         else:
             self._logger = logger
         model = MetaRNN_bcppr(output_dim, out_fn=output_act_fn, hidden_layers=hidden_layers, encoder_in=encoder,
-                              encoder_layers=encoder_layers)
+                              encoder_layers=encoder_layers, carry_size=hidden_dim)
+        # input_dim = (cote, cote, n_types + agents + murs) -> on en deduit n_types
+        # plutot que de l'ajouter au constructeur : impossible de le desynchroniser.
+        n_types = input_dim[2] - 2
         self.params = model.init(jax.random.PRNGKey(0), jnp.zeros((hidden_dim)), jnp.zeros((hidden_dim)),
-                                 jnp.zeros(input_dim), jnp.zeros([output_dim]), jnp.zeros([1]), jnp.zeros([1]))
+                                 jnp.zeros(input_dim), jnp.zeros([output_dim]), jnp.zeros([1]), jnp.zeros([1]),
+                                 jnp.zeros([n_types]))
 
         self.num_params, format_params_fn = get_params_format_fn(self.params)
         self._logger.info('MetaRNNPolicy.num_params = {}'.format(self.num_params))
@@ -183,5 +199,7 @@ class MetaRnnPolicy_bcppr(PolicyNetwork):
     def get_actions(self, t_states: TaskState, params: jnp.ndarray, p_states: PolicyState):
         params = self._format_params_fn(params)
         h, c, out = self._forward_fn(params, p_states.lstm_h, p_states.lstm_c, t_states.obs, t_states.last_actions,
-                                     t_states.rewards,jnp.expand_dims(t_states.agents.energy, 1).astype(jnp.float32))
+                                     t_states.rewards,
+                                     jnp.expand_dims(t_states.agents.energy, 1).astype(jnp.float32),
+                                     t_states.last_eaten.astype(jnp.float32))
         return out, metaRNNPolicyState_bcppr(keys=p_states.keys, lstm_h=h, lstm_c=c)
