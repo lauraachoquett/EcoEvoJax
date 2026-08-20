@@ -74,6 +74,10 @@ class MetaRNN_bcppr(nn.Module):
     encoder_in: bool
     encoder_layers: list
     carry_size: int = 4          # doit valoir hidden_dim : reset_b dimensionne h/c dessus
+    # "separee" : cablage actuel, la memoire ne voit pas la vision.
+    # "jointe"  : cablage d'avant 591269d, conserve pour pouvoir le rejouer et
+    #             le comparer. Voir __call__ pour ce que chacun change.
+    memory_mode: str = "separee"
 
     def setup(self):
         self._num_micro_ticks = 1
@@ -107,22 +111,45 @@ class MetaRNN_bcppr(nn.Module):
             for layer in self._encoder:
                 out = jax.nn.tanh(layer(out))
 
-        # Deux voies separees.
-        #
-        # La MEMOIRE ne recoit pas la vision : seulement ce que l'agent vient de
-        # manger, ce que ca lui a rapporte, et son etat interne. `last_eaten` et
-        # `reward` portent tous deux sur le pas precedent, donc l'association a
-        # retenir -- ce canal vaut tant -- arrive d'un bloc, sans qu'il y ait
-        # d'assignation de credit a faire a travers le temps.
-        mem_in = jnp.concatenate([last_action, reward, energy, last_eaten])
-        for _ in range(self._num_micro_ticks):
-            carry, mem = self._lstm(carry, mem_in)
+        if self.memory_mode == "separee":
+            # Deux voies separees.
+            #
+            # La MEMOIRE ne recoit pas la vision : seulement ce que l'agent vient
+            # de manger, ce que ca lui a rapporte, et son etat interne.
+            # `last_eaten` et `reward` portent tous deux sur le pas precedent,
+            # donc l'association a retenir -- ce canal vaut tant -- arrive d'un
+            # bloc, sans qu'il y ait d'assignation de credit a faire a travers le
+            # temps.
+            mem_in = jnp.concatenate([last_action, reward, energy, last_eaten])
+            for _ in range(self._num_micro_ticks):
+                carry, mem = self._lstm(carry, mem_in)
 
-        # La TETE combine la scene courante, qui suffit a naviguer, et la valeur
-        # apprise des canaux, qui n'existe que dans le carry. Pour eviter le
-        # poison il faut donc s'en servir : l'observation seule ne dit pas
-        # quel canal est toxique.
-        out = jnp.concatenate([out, last_action, reward, energy, mem])
+            # La TETE combine la scene courante, qui suffit a naviguer, et la
+            # valeur apprise des canaux, qui n'existe que dans le carry. Pour
+            # eviter le poison il faut donc s'en servir : l'observation seule ne
+            # dit pas quel canal est toxique.
+            out = jnp.concatenate([out, last_action, reward, energy, mem])
+
+        elif self.memory_mode == "jointe":
+            # Cablage d'avant 591269d, repris a l'identique.
+            #
+            # Le LSTM recoit la vision encodee, et sa sortie est reinjectee A
+            # COTE de cette meme vision : 4 dimensions sur 42 a l'entree de la
+            # tete. Le chemin reactif domine, et ablater le carry ne change
+            # presque rien -- c'est ce constat qui a motive la separation.
+            #
+            # `last_eaten` n'est PAS concatene : il n'existait pas dans ce
+            # reseau. L'ignorer est ce qui redonne exactement le nombre de
+            # parametres et le comportement du run d'origine.
+            inputs_encoded = jnp.concatenate([out, last_action, reward, energy])
+            for _ in range(self._num_micro_ticks):
+                carry, mem = self._lstm(carry, inputs_encoded)
+            out = jnp.concatenate([inputs_encoded, mem])
+
+        else:
+            raise ValueError(
+                f"memory_mode inconnu : {self.memory_mode!r} "
+                '(attendu "separee" ou "jointe")')
         for layer in self._hiddens:
             out = jax.nn.tanh(layer(out))
         out = self._output_proj(out)
@@ -151,6 +178,7 @@ class MetaRnnPolicy_bcppr(PolicyNetwork):
                  hidden_layers: list = [],
                  encoder: bool = False,
                  encoder_layers: list = [32, 32],
+                 memory_mode: str = "separee",
                  logger: logging.Logger = None):
 
         if logger is None:
@@ -158,7 +186,8 @@ class MetaRnnPolicy_bcppr(PolicyNetwork):
         else:
             self._logger = logger
         model = MetaRNN_bcppr(output_dim, out_fn=output_act_fn, hidden_layers=hidden_layers, encoder_in=encoder,
-                              encoder_layers=encoder_layers, carry_size=hidden_dim)
+                              encoder_layers=encoder_layers, carry_size=hidden_dim,
+                              memory_mode=memory_mode)
         # input_dim = (cote, cote, n_types + agents + murs) -> on en deduit n_types
         # plutot que de l'ajouter au constructeur : impossible de le desynchroniser.
         n_types = input_dim[2] - 2
@@ -169,6 +198,7 @@ class MetaRnnPolicy_bcppr(PolicyNetwork):
         self.num_params, format_params_fn = get_params_format_fn(self.params)
         self._logger.info('MetaRNNPolicy.num_params = {}'.format(self.num_params))
         self.hidden_dim = hidden_dim
+        self.memory_mode = memory_mode
         self._format_params_fn = jax.jit(jax.vmap(format_params_fn))
         self._forward_fn = jax.jit(jax.vmap(model.apply))
 
